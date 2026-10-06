@@ -1,0 +1,47 @@
+name: netscaler-poc
+
+services:
+  cpx:
+    image: quay.io/citrix/citrix-k8s-cpx-ingress:14.1-73.30
+    container_name: poc-netscaler-cpx
+    cap_add:
+      - NET_ADMIN
+    environment:
+      EULA: "yes"
+      CPX_CORES: "1"
+      CPX_CONFIG: '{"YIELD":"Yes"}'
+    ulimits:
+      core:
+        soft: -1
+        hard: -1
+    ports:
+      - "127.0.0.1:19080:9080"
+      - "127.0.0.1:19443:9443"
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ../../.local/cpx:/cpx
+    networks:
+      - lab
+
+  backend-a:
+    image: hashicorp/http-echo:1.0
+    container_name: poc-netscaler-backend-a
+    command: ["-listen=:8080", "-text=backend-a"]
+    ports:
+      - "127.0.0.1:18081:8080"
+    networks:
+      - lab
+
+  backend-b:
+    image: hashicorp/http-echo:1.0
+    container_name: poc-netscaler-backend-b
+    command: ["-listen=:8080", "-text=backend-b"]
+    ports:
+      - "127.0.0.1:18082:8080"
+    networks:
+      - lab
+
+networks:
+  lab:
+    external: true
+    name: kind
