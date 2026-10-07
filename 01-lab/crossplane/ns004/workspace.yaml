@@ -1,0 +1,94 @@
+apiVersion: opentofu.m.upbound.io/v1beta1
+kind: Workspace
+metadata:
+  name: ns004-http
+  namespace: netscaler-ns004
+  annotations:
+    crossplane.io/external-name: ns004-http
+spec:
+  providerConfigRef:
+    kind: ProviderConfig
+    name: ns004
+  forProvider:
+    source: Inline
+    inlineFormat: HCL
+    enableTofuCLILogging: true
+    env:
+      - name: NS_URL
+        value: "http://172.18.0.7:9080"
+      - name: NS_LOGIN
+        value: nsroot
+      - name: NS_PASSWORD
+        secretKeyRef:
+          name: ns004-nitro
+          key: NS_PASSWORD
+    varmap:
+      vip: "172.18.0.7"
+      lb_port: 8080
+      lb_method: ROUNDROBIN
+      backends:
+        a:
+          ip: "172.18.0.8"
+          port: 8080
+        b:
+          ip: "172.18.0.6"
+          port: 8080
+    module: |
+      variable "vip" {
+        type = string
+      }
+
+      variable "lb_port" {
+        type = number
+      }
+
+      variable "lb_method" {
+        type = string
+      }
+
+      variable "backends" {
+        type = map(object({
+          ip   = string
+          port = number
+        }))
+      }
+
+      resource "citrixadc_lbvserver" "http" {
+        name            = "poc-ns004-http"
+        servicetype     = "HTTP"
+        ipv46           = var.vip
+        port            = var.lb_port
+        lbmethod        = var.lb_method
+        persistencetype = "NONE"
+      }
+
+      resource "citrixadc_servicegroup" "http" {
+        servicegroupname = "poc-ns004-pool"
+        servicetype      = "HTTP"
+      }
+
+      resource "citrixadc_servicegroup_servicegroupmember_binding" "backend" {
+        for_each         = var.backends
+        servicegroupname = citrixadc_servicegroup.http.servicegroupname
+        ip               = each.value.ip
+        port             = each.value.port
+      }
+
+      resource "citrixadc_lbvserver_servicegroup_binding" "http" {
+        name             = citrixadc_lbvserver.http.name
+        servicegroupname = citrixadc_servicegroup.http.servicegroupname
+
+        lifecycle {
+          replace_triggered_by = [
+            citrixadc_lbvserver.http.port
+          ]
+        }
+      }
+
+      output "lb_name" {
+        value = citrixadc_lbvserver.http.name
+      }
+
+      output "lb_port" {
+        value = citrixadc_lbvserver.http.port
+      }
