@@ -1,6 +1,6 @@
 # Lab NetScaler — procédure de rejeu
 
-État au 7 octobre 2026 : NS-001 validé ; NS-002 terminé avec limites documentées. Création, trafic A/B, convergence, méthode configurée, membres, remplacement du port avec correction HCL et suppression nominale validés. À la clôture, le LB est supprimé ; CPX et les backends sont conservés.
+État au 7 octobre 2026 : NS-001 validé ; NS-002 terminé avec limites documentées ; NS-003 validé pour son volet CLI, reprise du provider différée en NS-004. Création, trafic A/B, convergence, méthode configurée, membres, remplacement du port avec correction HCL et suppression nominale validés. À la clôture, le LB est supprimé ; CPX et les backends sont conservés.
 
 Ce fichier est destiné à **`01-lab/README.md`**. Il donne les commandes opérationnelles de rejeu à partir du dépôt ; les [CR des spikes](../00-docs/spikes/) conservent les questions, observations et limites. La commande initiale de bootstrap du cluster reste extérieure à ce guide.
 
@@ -276,14 +276,33 @@ Résultat validé : cinq ressources détruites, aucune adresse dans le state, No
 
 Conserver le state local et les données CPX. Un plan normal après ce destroy proposerait cinq créations ; le HCL reste présent. Ne pas confondre nettoyage nominal, arrêt du lab et suppression du state.
 
-## 10. Fin de session et prochaines étapes
+## 10. Rejouer le backend Kubernetes et la reprise — NS-003
+
+Procédure complète, commandes et résultats dans [NS-003](../00-docs/spikes/NS-003.md). Le module dédié est `01-lab/hcl/netscaler-state/` ; il reprend le module NS-002 corrigé et ajoute lb_name/pool_name.
+
+| Exécution | Backend | Entrées ADC | Trafic |
+|---|---|---|---|
+| A | namespace netscaler-state, workspace default, suffixe ns003-a | poc-ns003-a-http / poc-ns003-a-pool, port 8080 | WSL 127.0.0.1:18080 |
+| Reprise A | Identique à A, répertoire neuf | Identiques à A | Aucun nouvel apply |
+| B | Même namespace/workspace, suffixe ns003-b | poc-ns003-b-http / poc-ns003-b-pool, port 8081 | Pod vers IP CPX:8081 |
+
+Rejeu : préparer namespace et droits ; initialiser le module A ; exporter credentials/IP et noms A ; plan/apply et trafic ; sauvegarder le state ; initialiser un répertoire neuf sur le même backend et comparer IDs/lineage/serial. Pour B, utiliser un autre répertoire et suffixe, et des overrides de noms/port dans un sous-shell pour préserver les variables A. Les commandes exactes sont dans le CR lié ; aucun state ou .terraform ne doit être copié pour le test de reprise.
+
+Résultats acquis : A 20 succès, plan 0 ; reprise A diff identité vide ; B lineage distinct et 20 succès ; restauration B après suppression contrôlée de son Secret, sans force, lineage conservé, serial 2 → 3 et plan 0 ; destruction B sans effet sur A ; destruction A et backends préservés.
+
+La suppression du Secret de B est un test de perte maîtrisée avec sauvegarde vérifiée et writers arrêtés, pas une méthode normale de nettoyage. Aucun plan/init/apply entre la perte et le state push. Au rejeu, utiliser les lineages du nouveau test, pas les UUID historiques. Ne pas restaurer les snapshots pré-destroy comme état courant après suppression des objets.
+
+À la sortie de NS-003, A et B sont supprimés ; namespace et sauvegardes sont conservés. Un rejeu commence donc par cinq créations sur un state ne suivant plus de ressources. Kubernetes dans kind n’assure pas la durabilité après reset du cluster. Le redémarrage du provider, ses droits et sa sélection de state seront testés en NS-004 ; la contention des locks en NS-008.
+
+## 11. Fin de session et prochaines étapes
 
 ```bash
 unset NS_PASSWORD NS_LOGIN NS_URL
 unset TF_VAR_vip TF_VAR_backends TF_VAR_lb_method TF_VAR_lb_port
 unset NS002_BACKENDS_ORIGINAL
+unset TF_VAR_lb_name TF_VAR_pool_name
 ```
 
 Ce nettoyage d’environnement ne détruit aucun objet. Si la section 9 a été exécutée, le LB est supprimé ; le state vide et les conteneurs restent conservés. Sans exécution de la section 9, le LB reste présent.
 
-**À compléter après exécution :** backend durable NS-003 ; exécution Workspace NS-004. Ne pas supprimer le state ou `.local/cpx` pour « repartir propre » tant que la propriété et le nettoyage des objets ADC ne sont pas maîtrisés.
+**À compléter :** exécution Workspace NS-004 et reprise du provider sur le backend qualifié. Ne pas supprimer le state ou `.local/cpx` pour « repartir propre » tant que la propriété et le nettoyage des objets ADC ne sont pas maîtrisés.
