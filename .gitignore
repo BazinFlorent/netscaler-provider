@@ -1,2 +1,7 @@
 # Fichiers générés par CPX
 .local
+
+# Répertoires de travail OpenTofu / Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
