@@ -3,4 +3,4 @@ kind: Project
 metadata:
   name: netscaler-provider
 spec:
-  repository: example.com/my-org/netscaler-provider
+  repository: registry.netscaler-provider.local:5000/netscaler-provider
