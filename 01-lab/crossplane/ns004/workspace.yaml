@@ -27,7 +27,9 @@ spec:
       lb_port: 8080
       lb_method: ROUNDROBIN
       backends:
-
+        a:
+          ip: "172.18.0.7"
+          port: 8080
         b:
           ip: "172.18.0.8"
           port: 8080

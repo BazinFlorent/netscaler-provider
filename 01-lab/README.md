@@ -1,6 +1,6 @@
 # Lab NetScaler — procédure de rejeu
 
-État des volets CLI au 7 octobre 2026 (mise à jour de reprise NS-004 au 9 octobre) : NS-001 validé ; NS-002 terminé avec limites documentées ; NS-003 validé pour son volet CLI, reprise du provider différée en NS-004. Création, trafic A/B, convergence, méthode configurée, membres, remplacement du port avec correction HCL et suppression nominale validés. À la clôture, le LB est supprimé ; CPX et les backends sont conservés.
+État au 7 octobre 2026 : NS-001 validé ; NS-002 en cours. Création du LB, trafic A/B, convergence et retrait/retour de B validés. Modification de méthode configurée validée avec réserve sur la méthode courante. Port et suppression complète non testés.
 
 Ce fichier est destiné à **`01-lab/README.md`**. Il donne les commandes opérationnelles de rejeu à partir du dépôt ; les [CR des spikes](../00-docs/spikes/) conservent les questions, observations et limites. La commande initiale de bootstrap du cluster reste extérieure à ce guide.
 
@@ -34,77 +34,6 @@ curl -fsS http://127.0.0.1:18082/
 ```
 
 Attendu : trois conteneurs Up, CPX démarré et réponses `backend-a`, `backend-b`. `config --quiet` vérifie le modèle Compose, pas la disponibilité des services.
-
-## 1.1. Reprendre NS-004 après un arrêt du lab
-
-Les adresses du réseau Docker `kind` sont dynamiques : elles peuvent changer lors d’un arrêt/redémarrage, et ne sont pas garanties au rejeu. `launch.sh` démarre les services mais ne met pas à jour le manifeste du MR Workspace. Les variables shell utilisées pour générer ce manifeste sont remplacées une seule fois ; Kubernetes conserve ensuite des valeurs fixes.
-
-Incident observé le 9 octobre 2026 : CPX et les deux backends étaient arrêtés. Le Workspace affichait `SYNCED=False`, `READY=True`, avec `no route to host` vers l’ancienne IP NITRO. Après le lancement du lab, les IP avaient changé :
-
-| Conteneur | Ancienne IP | IP après reprise |
-|---|---|---|
-| CPX | 172.18.0.7 | 172.18.0.6 |
-| Backend A | 172.18.0.8 | 172.18.0.7 |
-| Backend B | 172.18.0.6 | 172.18.0.8 |
-
-Ces valeurs documentent cette session ; toujours récupérer les IP effectives :
-
-```bash
-docker compose -f 01-lab/cpx/compose.yaml ps
-docker inspect \
-  poc-netscaler-cpx \
-  poc-netscaler-backend-a \
-  poc-netscaler-backend-b \
-  --format '{{.Name}} => {{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}'
-```
-
-Après démarrage de CPX, mettre à jour `01-lab/crossplane/ns004/workspace.yaml` :
-
-- `spec.forProvider.env` : entrée `NS_URL` = `http://<IP actuelle CPX>:9080` ; ce chemin est utilisé depuis le pod du provider.
-- `spec.forProvider.varmap.vip` : IP actuelle CPX.
-- `spec.forProvider.varmap.backends` : IP actuelle de chaque membre déclaré, port 8080.
-
-Conserver le choix des membres du scénario en cours. Si A a été retiré, ne garder que B ; ne pas recréer automatiquement A/B pour résoudre un incident réseau. Les ports publiés sur la WSL restent `18080` pour le LB sur 8080, `18081` pour A, `18082` pour B et `19080` pour NITRO.
-
-Rafraîchir le Secret avec le mot de passe initial actuel du lab (si le mot de passe a été changé manuellement, utiliser celui en vigueur) :
-
-```bash
-CPX_PASSWORD="$(docker exec poc-netscaler-cpx \
-  cat /var/deviceinfo/random_id)"
-
-printf '%s' "$CPX_PASSWORD" \
-  | kubectl --context kind-netscaler-provider \
-      create secret generic ns004-nitro \
-      -n netscaler-ns004 \
-      --from-file=NS_PASSWORD=/dev/stdin \
-      --dry-run=client -o yaml \
-  | kubectl --context kind-netscaler-provider apply -f -
-
-kubectl --context kind-netscaler-provider apply \
-  -f 01-lab/crossplane/ns004/workspace.yaml
-
-kubectl --context kind-netscaler-provider get \
-  workspaces.opentofu.m.upbound.io ns004-http \
-  -n netscaler-ns004 -o json | jq '.status.conditions'
-```
-
-Attendu : `Synced=True`, `Ready=True` après réconciliation. `READY=True` seul ne valide pas l’état courant ; lire le message de `Synced` en cas d’erreur. Vérifier ensuite le LB et le trafic :
-
-```bash
-docker exec poc-netscaler-cpx \
-  /var/netscaler/bins/cli_script.sh "show lb vserver poc-ns004-http"
-
-for request in $(seq 1 10); do
-  printf '%02d : ' "$request"
-  curl -fsS --connect-timeout 5 --max-time 10 \
-    http://127.0.0.1:18080/ || break
-done
-curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:18081/
-```
-
-Résultat confirmé dans cette session avec B seul déclaré : LB UP avec un membre B, dix réponses `backend-b` via le LB et `backend-a` en accès direct. La modification de membres et la remise en état après changement d’IP ont été combinées ; ce résultat ne qualifie pas un retrait isolé sans changement réseau.
-
-À automatiser : un script de préparation du Workspace qui récupère les IP par `docker inspect` et actualise uniquement l’endpoint, la VIP et les membres déjà déclarés, avant un apply explicite. Le manifeste actuel ne fait pas de découverte dynamique. Ne pas remplacer les IP par les noms Compose sans valider leur résolution depuis les pods Kubernetes et la prise en charge des noms par les ressources CitrixADC concernées.
 
 ## 2. Configurer la session HCL
 
@@ -176,7 +105,7 @@ NS002_PLAN_EXIT=$?
 printf 'Code du plan : %s\n' "$NS002_PLAN_EXIT"
 ```
 
-Codes : 0 = aucun changement ; 1 = erreur ; 2 = changements proposés. Capturer le code immédiatement. Première création sur lab vierge : cinq ajouts attendus. Reprise d’un LB existant avec state et entrées inchangés : plan vide attendu. À la clôture de NS-002, le LB a été détruit et le state ne suit plus de ressources : cinq créations sont donc attendues pour le recréer. Vérifier que le plan ne touche que les objets NS-002.
+Codes : 0 = aucun changement ; 1 = erreur ; 2 = changements proposés. Capturer le code immédiatement. Première création sur lab vierge : cinq ajouts attendus. Reprise de l’état actuel avec state et entrées inchangés : plan vide attendu. Vérifier que le plan ne touche que les objets NS-002.
 
 Après inspection :
 
@@ -221,7 +150,7 @@ docker exec poc-netscaler-cpx \
   /var/netscaler/bins/cli_script.sh "show lb parameter"
 ```
 
-Puis refaire la section 5. Attendu : méthode configurée LEASTCONNECTION, trafic réussi et plan vide. À la session validée, la méthode courante reste Round Robin en phase startup ; Start RR Factor vaut 0. Un test temporaire global startupRRFactor=1 a ensuite montré la disparition de la ligne Current Method Round Robin ; aucun test concurrent n’a qualifié la répartition Least Connection. Le retour à la valeur initiale 0 est confirmé à la clôture (section 8).
+Puis refaire la section 5. Attendu : méthode configurée LEASTCONNECTION, trafic réussi et plan vide. À la session validée, la méthode courante reste Round Robin en phase startup ; Start RR Factor vaut 0. Le passage effectif à Least Connection n’est pas prouvé par ce test et aucun paramètre global n’a été modifié.
 
 ## 7. Retirer puis rétablir B
 
@@ -262,118 +191,14 @@ docker exec poc-netscaler-cpx \
 
 Refaire la section 5 : deux membres actifs, A/B observés et plan vide. Si le terminal a été fermé, reconstituer A/B par la section 2 plutôt que restaurer une variable disparue.
 
-## 8. Rejouer le remplacement du port avec la correction HCL
-
-Le module doit inclure ce bloc dans `citrixadc_lbvserver_servicegroup_binding.http` :
-
-```hcl
-lifecycle {
-  replace_triggered_by = [citrixadc_lbvserver.http.port]
-}
-```
-
-Sans ce bloc, le test a nécessité deux apply : remplacement du vserver puis réparation de la liaison au pool. Avec ce bloc, le retour 8081 → 8080 a convergé en un seul apply. Le remplacement peut interrompre le trafic ; aucune continuité n’est garantie.
-
-Vérifier le paramètre global après tout test temporaire de startup (valeur 0 confirmée à la clôture de NS-002) :
-
-```bash
-docker exec poc-netscaler-cpx \
-  /var/netscaler/bins/cli_script.sh "show lb parameter"
-# Si le facteur n’est pas à sa valeur initiale 0, rétablir dans ce lab isolé :
-# docker exec poc-netscaler-cpx \
-#   /var/netscaler/bins/cli_script.sh "set lb parameter -startupRRFactor 0"
-```
-
-Depuis le LB courant sur 8080 :
-
-```bash
-export TF_VAR_lb_port=8081
-tofu -chdir=01-lab/hcl/netscaler fmt -check
-tofu -chdir=01-lab/hcl/netscaler validate
-tofu -chdir=01-lab/hcl/netscaler plan
-# Attendu avec correction : 2 ajouts / 2 suppressions, vserver et liaison uniquement
-tofu -chdir=01-lab/hcl/netscaler apply
-
-docker exec poc-netscaler-cpx \
-  /var/netscaler/bins/cli_script.sh "show lb vserver poc-ns002-http"
-CPX_IP="$TF_VAR_vip"
-kubectl --context kind-netscaler-provider run ns002-port-check \
-  --image=curlimages/curl:8.12.1 --restart=Never \
-  --command -- curl -fsS --connect-timeout 5 --max-time 10 \
-  "http://${CPX_IP}:8081/"
-kubectl --context kind-netscaler-provider wait \
-  --for=jsonpath='{.status.phase}'=Succeeded pod/ns002-port-check --timeout=30s
-kubectl --context kind-netscaler-provider logs ns002-port-check
-kubectl --context kind-netscaler-provider delete pod ns002-port-check
-
-tofu -chdir=01-lab/hcl/netscaler plan -detailed-exitcode
-NS002_PLAN_EXIT=$?
-printf 'Code du plan : %s\n' "$NS002_PLAN_EXIT"
-```
-
-Attendu : UP, deux membres actifs, réponse A ou B et plan 0. Le test HTTP sur 8081 après réparation n’avait pas produit de réponse visible dans les preuves partagées ; cette variante de capture des logs est une procédure de rejeu, pas un résultat acquis. Si le wait échoue, examiner logs et statut. Le port WSL 18080 reste publié vers CPX:8080 et ne teste pas 8081.
-
-Revenir au port publié pour poursuivre le lab :
-
-```bash
-export TF_VAR_lb_port=8080
-tofu -chdir=01-lab/hcl/netscaler plan
-# Attendu : vserver + liaison remplacés ; pool et membres préservés
-tofu -chdir=01-lab/hcl/netscaler apply
-```
-
-Puis refaire les contrôles CLI et la section 5. Retour corrigé effectivement validé : UP, deux membres, 10 succès (5 A / 5 B), plan 0 dès le premier apply.
-
-## 9. Supprimer les objets NS-002 en conservant le lab
-
-```bash
-tofu -chdir=01-lab/hcl/netscaler plan -destroy
-# Attendu si les deux membres sont présents : 0 ajout, 0 modification, 5 suppressions
-# Vérifier que le périmètre contient uniquement les ressources NS-002
-tofu -chdir=01-lab/hcl/netscaler destroy
-
-tofu -chdir=01-lab/hcl/netscaler state list
-
-docker exec poc-netscaler-cpx \
-  /var/netscaler/bins/cli_script.sh "show lb vserver poc-ns002-http"
-docker exec poc-netscaler-cpx \
-  /var/netscaler/bins/cli_script.sh "show serviceGroup poc-ns002-pool"
-
-curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:18081/
-curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:18082/
-```
-
-Résultat validé : cinq ressources détruites, aucune adresse dans le state, No such resource pour le vserver et le pool, réponses backend-a et backend-b préservées. Ces erreurs CLI sont le résultat attendu du contrôle d’absence. Les objets parents absents ne portent plus leurs bindings ; aucun inventaire exhaustif ADC n’a été réalisé.
-
-Conserver le state local et les données CPX. Un plan normal après ce destroy proposerait cinq créations ; le HCL reste présent. Ne pas confondre nettoyage nominal, arrêt du lab et suppression du state.
-
-## 10. Rejouer le backend Kubernetes et la reprise — NS-003
-
-Procédure complète, commandes et résultats dans [NS-003](../00-docs/spikes/NS-003.md). Le module dédié est `01-lab/hcl/netscaler-state/` ; il reprend le module NS-002 corrigé et ajoute lb_name/pool_name.
-
-| Exécution | Backend | Entrées ADC | Trafic |
-|---|---|---|---|
-| A | namespace netscaler-state, workspace default, suffixe ns003-a | poc-ns003-a-http / poc-ns003-a-pool, port 8080 | WSL 127.0.0.1:18080 |
-| Reprise A | Identique à A, répertoire neuf | Identiques à A | Aucun nouvel apply |
-| B | Même namespace/workspace, suffixe ns003-b | poc-ns003-b-http / poc-ns003-b-pool, port 8081 | Pod vers IP CPX:8081 |
-
-Rejeu : préparer namespace et droits ; initialiser le module A ; exporter credentials/IP et noms A ; plan/apply et trafic ; sauvegarder le state ; initialiser un répertoire neuf sur le même backend et comparer IDs/lineage/serial. Pour B, utiliser un autre répertoire et suffixe, et des overrides de noms/port dans un sous-shell pour préserver les variables A. Les commandes exactes sont dans le CR lié ; aucun state ou .terraform ne doit être copié pour le test de reprise.
-
-Résultats acquis : A 20 succès, plan 0 ; reprise A diff identité vide ; B lineage distinct et 20 succès ; restauration B après suppression contrôlée de son Secret, sans force, lineage conservé, serial 2 → 3 et plan 0 ; destruction B sans effet sur A ; destruction A et backends préservés.
-
-La suppression du Secret de B est un test de perte maîtrisée avec sauvegarde vérifiée et writers arrêtés, pas une méthode normale de nettoyage. Aucun plan/init/apply entre la perte et le state push. Au rejeu, utiliser les lineages du nouveau test, pas les UUID historiques. Ne pas restaurer les snapshots pré-destroy comme état courant après suppression des objets.
-
-À la sortie de NS-003, A et B sont supprimés ; namespace et sauvegardes sont conservés. Un rejeu commence donc par cinq créations sur un state ne suivant plus de ressources. Kubernetes dans kind n’assure pas la durabilité après reset du cluster. Le redémarrage du provider, ses droits et sa sélection de state seront testés en NS-004 ; la contention des locks en NS-008.
-
-## 11. Fin de session et prochaines étapes
+## 8. Fin de session et prochaines étapes
 
 ```bash
 unset NS_PASSWORD NS_LOGIN NS_URL
 unset TF_VAR_vip TF_VAR_backends TF_VAR_lb_method TF_VAR_lb_port
 unset NS002_BACKENDS_ORIGINAL
-unset TF_VAR_lb_name TF_VAR_pool_name
 ```
 
-Ce nettoyage d’environnement ne détruit aucun objet. Si la section 9 a été exécutée, le LB est supprimé ; le state vide et les conteneurs restent conservés. Sans exécution de la section 9, le LB reste présent.
+Le LB, le state et les conteneurs sont conservés pour la suite. Ce nettoyage d’environnement ne détruit aucun objet.
 
-**À compléter :** exécution Workspace NS-004 et reprise du provider sur le backend qualifié. Ne pas supprimer le state ou `.local/cpx` pour « repartir propre » tant que la propriété et le nettoyage des objets ADC ne sont pas maîtrisés.
+**À compléter après exécution :** changement de port avec mapping Docker correspondant ; suppression complète des objets NS-002 ; backend durable NS-003 ; exécution Workspace NS-004. Ne pas supprimer le state ou `.local/cpx` pour « repartir propre » tant que la propriété et le nettoyage des objets ADC ne sont pas maîtrisés.
