@@ -5,3 +5,6 @@
 **/.terraform/
 *.tfstate
 *.tfstate.*
+
+# Schémas et bindings générés par la CLI Crossplane
+/schemas/

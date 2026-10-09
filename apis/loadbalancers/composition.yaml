@@ -1,0 +1,16 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: loadbalancers.networking.archerry.fr
+spec:
+  compositeTypeRef:
+    apiVersion: networking.archerry.fr/v1alpha1
+    kind: LoadBalancer
+  mode: Pipeline
+  pipeline:
+  - functionRef:
+      name: netscaler-providercompose-loadbalancer
+    step: compose-loadbalancer
+  - functionRef:
+      name: crossplane-contrib-function-auto-ready
+    step: crossplane-contrib-function-auto-ready

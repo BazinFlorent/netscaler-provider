@@ -1,0 +1,16 @@
+apiVersion: networking.archerry.fr/v1alpha1
+kind: LoadBalancer
+metadata:
+  name: ns012-http
+  namespace: netscaler-ns012
+spec:
+  vip: "172.18.0.6"
+  port: 8080
+  method: ROUNDROBIN
+  backends:
+    a:
+      ip: "172.18.0.7"
+      port: 8080
+    b:
+      ip: "172.18.0.8"
+      port: 8080

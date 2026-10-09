@@ -1,0 +1,68 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: loadbalancers.networking.archerry.fr
+spec:
+  group: networking.archerry.fr
+  names:
+    categories:
+      - crossplane
+    kind: LoadBalancer
+    plural: loadbalancers
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              description: Configuration du load balancer HTTP.
+              required:
+                - vip
+                - port
+                - backends
+              properties:
+                vip:
+                  type: string
+                  description: Adresse IPv4 du point d’entrée du LB.
+                  pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+                port:
+                  type: integer
+                  description: Port d’écoute du LB.
+                  minimum: 1
+                  maximum: 65535
+                method:
+                  type: string
+                  description: Méthode de répartition du trafic.
+                  default: ROUNDROBIN
+                  enum:
+                    - ROUNDROBIN
+                    - LEASTCONNECTION
+                backends:
+                  type: object
+                  description: Membres du pool, identifiés par des clés stables.
+                  minProperties: 1
+                  additionalProperties:
+                    type: object
+                    required:
+                      - ip
+                      - port
+                    properties:
+                      ip:
+                        type: string
+                        description: Adresse IPv4 du backend.
+                        pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+                      port:
+                        type: integer
+                        description: Port HTTP du backend.
+                        minimum: 1
+                        maximum: 65535
+            status:
+              type: object
+              description: État observé du load balancer.

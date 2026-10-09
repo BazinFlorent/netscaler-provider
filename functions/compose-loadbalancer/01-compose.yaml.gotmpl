@@ -1,0 +1,112 @@
+# code: language=yaml
+# yaml-language-server: $schema=../../schemas/json/index.schema.json
+
+{{- $productKey := printf "%s/%s" $xr.metadata.namespace $xr.metadata.name -}}
+{{- $identity := printf "ns012-%s" ($productKey | sha256sum | trunc 16) -}}
+
+---
+apiVersion: opentofu.m.upbound.io/v1beta1
+kind: Workspace
+metadata:
+  name: {{ $identity | quote }}
+  namespace: {{ $xr.metadata.namespace | quote }}
+  annotations:
+    {{ setResourceNameAnnotation "workspace" }}
+    crossplane.io/external-name: {{ $identity | quote }}
+spec:
+  managementPolicies:
+    - "*"
+  providerConfigRef:
+    kind: ProviderConfig
+    name: ns012
+  forProvider:
+    source: Inline
+    inlineFormat: HCL
+    enableTofuCLILogging: true
+    env:
+      - name: NS_URL
+        secretKeyRef:
+          name: ns012-nitro
+          key: NS_URL
+      - name: NS_LOGIN
+        secretKeyRef:
+          name: ns012-nitro
+          key: NS_LOGIN
+      - name: NS_PASSWORD
+        secretKeyRef:
+          name: ns012-nitro
+          key: NS_PASSWORD
+    varmap:
+      lb_name: {{ printf "%s-http" $identity | quote }}
+      pool_name: {{ printf "%s-pool" $identity | quote }}
+      vip: {{ $xr.spec.vip | quote }}
+      lb_port: {{ $xr.spec.port }}
+      lb_method: {{ $xr.spec.method | default "ROUNDROBIN" | quote }}
+      backends: {{ $xr.spec.backends | toJson }}
+    module: |
+      variable "lb_name" {
+        type = string
+      }
+
+      variable "pool_name" {
+        type = string
+      }
+
+      variable "vip" {
+        type = string
+      }
+
+      variable "lb_port" {
+        type = number
+      }
+
+      variable "lb_method" {
+        type = string
+      }
+
+      variable "backends" {
+        type = map(object({
+          ip   = string
+          port = number
+        }))
+      }
+
+      resource "citrixadc_lbvserver" "http" {
+        name            = var.lb_name
+        servicetype     = "HTTP"
+        ipv46           = var.vip
+        port            = var.lb_port
+        lbmethod        = var.lb_method
+        persistencetype = "NONE"
+      }
+
+      resource "citrixadc_servicegroup" "http" {
+        servicegroupname = var.pool_name
+        servicetype      = "HTTP"
+      }
+
+      resource "citrixadc_servicegroup_servicegroupmember_binding" "backend" {
+        for_each         = var.backends
+        servicegroupname = citrixadc_servicegroup.http.servicegroupname
+        ip               = each.value.ip
+        port             = each.value.port
+      }
+
+      resource "citrixadc_lbvserver_servicegroup_binding" "http" {
+        name             = citrixadc_lbvserver.http.name
+        servicegroupname = citrixadc_servicegroup.http.servicegroupname
+
+        lifecycle {
+          replace_triggered_by = [
+            citrixadc_lbvserver.http.port
+          ]
+        }
+      }
+
+      output "lb_name" {
+        value = citrixadc_lbvserver.http.name
+      }
+
+      output "lb_port" {
+        value = citrixadc_lbvserver.http.port
+      }
