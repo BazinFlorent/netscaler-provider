@@ -8,3 +8,6 @@
 
 # Schémas et bindings générés par la CLI Crossplane
 /schemas/
+
+# Packages construits par la CLI Crossplane
+/_output/

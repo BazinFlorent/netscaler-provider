@@ -1,0 +1,25 @@
+apiVersion: opentofu.m.upbound.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: ns012
+  namespace: netscaler-ns012
+spec:
+  configuration: |
+    terraform {
+      required_version = ">= 1.10.0, < 1.11.0"
+
+      required_providers {
+        citrixadc = {
+          source  = "registry.terraform.io/citrix/citrixadc"
+          version = "2.3.0"
+        }
+      }
+
+      backend "kubernetes" {
+        namespace         = "netscaler-state"
+        secret_suffix     = "ns012"
+        in_cluster_config = true
+      }
+    }
+
+    provider "citrixadc" {}
