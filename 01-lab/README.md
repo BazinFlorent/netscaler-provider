@@ -1,6 +1,6 @@
 # Lab NetScaler — procédure de rejeu
 
-État au 7 octobre 2026 : NS-001 validé ; NS-002 terminé avec limites documentées ; NS-003 validé pour son volet CLI, reprise du provider différée en NS-004. Création, trafic A/B, convergence, méthode configurée, membres, remplacement du port avec correction HCL et suppression nominale validés. À la clôture, le LB est supprimé ; CPX et les backends sont conservés.
+État des volets CLI au 7 octobre 2026 (mise à jour de reprise NS-004 au 9 octobre) : NS-001 validé ; NS-002 terminé avec limites documentées ; NS-003 validé pour son volet CLI, reprise du provider différée en NS-004. Création, trafic A/B, convergence, méthode configurée, membres, remplacement du port avec correction HCL et suppression nominale validés. À la clôture, le LB est supprimé ; CPX et les backends sont conservés.
 
 Ce fichier est destiné à **`01-lab/README.md`**. Il donne les commandes opérationnelles de rejeu à partir du dépôt ; les [CR des spikes](../00-docs/spikes/) conservent les questions, observations et limites. La commande initiale de bootstrap du cluster reste extérieure à ce guide.
 
@@ -34,6 +34,77 @@ curl -fsS http://127.0.0.1:18082/
 ```
 
 Attendu : trois conteneurs Up, CPX démarré et réponses `backend-a`, `backend-b`. `config --quiet` vérifie le modèle Compose, pas la disponibilité des services.
+
+## 1.1. Reprendre NS-004 après un arrêt du lab
+
+Les adresses du réseau Docker `kind` sont dynamiques : elles peuvent changer lors d’un arrêt/redémarrage, et ne sont pas garanties au rejeu. `launch.sh` démarre les services mais ne met pas à jour le manifeste du MR Workspace. Les variables shell utilisées pour générer ce manifeste sont remplacées une seule fois ; Kubernetes conserve ensuite des valeurs fixes.
+
+Incident observé le 9 octobre 2026 : CPX et les deux backends étaient arrêtés. Le Workspace affichait `SYNCED=False`, `READY=True`, avec `no route to host` vers l’ancienne IP NITRO. Après le lancement du lab, les IP avaient changé :
+
+| Conteneur | Ancienne IP | IP après reprise |
+|---|---|---|
+| CPX | 172.18.0.7 | 172.18.0.6 |
+| Backend A | 172.18.0.8 | 172.18.0.7 |
+| Backend B | 172.18.0.6 | 172.18.0.8 |
+
+Ces valeurs documentent cette session ; toujours récupérer les IP effectives :
+
+```bash
+docker compose -f 01-lab/cpx/compose.yaml ps
+docker inspect \
+  poc-netscaler-cpx \
+  poc-netscaler-backend-a \
+  poc-netscaler-backend-b \
+  --format '{{.Name}} => {{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}'
+```
+
+Après démarrage de CPX, mettre à jour `01-lab/crossplane/ns004/workspace.yaml` :
+
+- `spec.forProvider.env` : entrée `NS_URL` = `http://<IP actuelle CPX>:9080` ; ce chemin est utilisé depuis le pod du provider.
+- `spec.forProvider.varmap.vip` : IP actuelle CPX.
+- `spec.forProvider.varmap.backends` : IP actuelle de chaque membre déclaré, port 8080.
+
+Conserver le choix des membres du scénario en cours. Si A a été retiré, ne garder que B ; ne pas recréer automatiquement A/B pour résoudre un incident réseau. Les ports publiés sur la WSL restent `18080` pour le LB sur 8080, `18081` pour A, `18082` pour B et `19080` pour NITRO.
+
+Rafraîchir le Secret avec le mot de passe initial actuel du lab (si le mot de passe a été changé manuellement, utiliser celui en vigueur) :
+
+```bash
+CPX_PASSWORD="$(docker exec poc-netscaler-cpx \
+  cat /var/deviceinfo/random_id)"
+
+printf '%s' "$CPX_PASSWORD" \
+  | kubectl --context kind-netscaler-provider \
+      create secret generic ns004-nitro \
+      -n netscaler-ns004 \
+      --from-file=NS_PASSWORD=/dev/stdin \
+      --dry-run=client -o yaml \
+  | kubectl --context kind-netscaler-provider apply -f -
+
+kubectl --context kind-netscaler-provider apply \
+  -f 01-lab/crossplane/ns004/workspace.yaml
+
+kubectl --context kind-netscaler-provider get \
+  workspaces.opentofu.m.upbound.io ns004-http \
+  -n netscaler-ns004 -o json | jq '.status.conditions'
+```
+
+Attendu : `Synced=True`, `Ready=True` après réconciliation. `READY=True` seul ne valide pas l’état courant ; lire le message de `Synced` en cas d’erreur. Vérifier ensuite le LB et le trafic :
+
+```bash
+docker exec poc-netscaler-cpx \
+  /var/netscaler/bins/cli_script.sh "show lb vserver poc-ns004-http"
+
+for request in $(seq 1 10); do
+  printf '%02d : ' "$request"
+  curl -fsS --connect-timeout 5 --max-time 10 \
+    http://127.0.0.1:18080/ || break
+done
+curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:18081/
+```
+
+Résultat confirmé dans cette session avec B seul déclaré : LB UP avec un membre B, dix réponses `backend-b` via le LB et `backend-a` en accès direct. La modification de membres et la remise en état après changement d’IP ont été combinées ; ce résultat ne qualifie pas un retrait isolé sans changement réseau.
+
+À automatiser : un script de préparation du Workspace qui récupère les IP par `docker inspect` et actualise uniquement l’endpoint, la VIP et les membres déjà déclarés, avant un apply explicite. Le manifeste actuel ne fait pas de découverte dynamique. Ne pas remplacer les IP par les noms Compose sans valider leur résolution depuis les pods Kubernetes et la prise en charge des noms par les ressources CitrixADC concernées.
 
 ## 2. Configurer la session HCL
 

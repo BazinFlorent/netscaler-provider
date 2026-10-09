@@ -15,7 +15,7 @@ spec:
     enableTofuCLILogging: true
     env:
       - name: NS_URL
-        value: "http://172.18.0.7:9080"
+        value: "http://172.18.0.6:9080"
       - name: NS_LOGIN
         value: nsroot
       - name: NS_PASSWORD
@@ -23,15 +23,13 @@ spec:
           name: ns004-nitro
           key: NS_PASSWORD
     varmap:
-      vip: "172.18.0.7"
+      vip: "172.18.0.6"
       lb_port: 8080
       lb_method: ROUNDROBIN
       backends:
-        a:
-          ip: "172.18.0.8"
-          port: 8080
+
         b:
-          ip: "172.18.0.6"
+          ip: "172.18.0.8"
           port: 8080
     module: |
       variable "vip" {
