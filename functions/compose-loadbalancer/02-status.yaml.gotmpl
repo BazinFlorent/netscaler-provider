@@ -1,0 +1,14 @@
+# code: language=yaml
+# yaml-language-server: $schema=../../schemas/json/index.schema.json
+
+{{- $workspace := getComposedResource . "workspace" | default dict -}}
+{{- $outputs := dig "status" "atProvider" "outputs" (dict) $workspace -}}
+
+{{- if and (hasKey $outputs "lb_name") (hasKey $outputs "lb_port") }}
+---
+apiVersion: {{ $xr.apiVersion }}
+kind: {{ $xr.kind }}
+status:
+  lbName: {{ index $outputs "lb_name" | quote }}
+  lbPort: {{ index $outputs "lb_port" }}
+{{- end }}
